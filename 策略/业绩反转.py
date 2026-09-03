@@ -1,107 +1,129 @@
 import akshare as ak
 import pandas as pd
+import time
+
+
+def get_finance_with_retry(date, retries=3):
+    """
+    获取业绩报表。
+    如果东方财富临时断开连接，自动重试。
+    """
+
+    last_error = None
+
+    for i in range(retries):
+        try:
+            df = ak.stock_yjbb_em(date=date)
+
+            if df is not None and not df.empty:
+                return df
+
+        except Exception as e:
+            last_error = e
+
+            if i < retries - 1:
+                time.sleep(3)
+
+    raise RuntimeError(
+        f"财务数据接口连续 {retries} 次连接失败：{last_error}"
+    )
 
 
 def run_reversal(
     min_revenue_growth=10.0,
     min_profit_growth=30.0,
-    min_acceleration=20.0
+    min_acceleration=20.0,
+    report_date="20260630"
 ):
     """
     业绩反转策略 V1
 
-    核心逻辑：
-    1. 营业收入同比增长 >= 指定值
-    2. 净利润同比增长 >= 指定值
-    3. 净利润增速相较上一期明显改善
-    4. 排除 ST / *ST
+    默认使用 2026 半年报数据。
 
-    参数：
-    min_revenue_growth  最低营收同比增速
-    min_profit_growth   最低净利润同比增速
-    min_acceleration    净利润增速至少改善多少个百分点
+    条件：
+    1. 营业总收入同比 >= min_revenue_growth
+    2. 净利润同比 >= min_profit_growth
+    3. 净利润同比超过最低门槛至少 min_acceleration 个百分点
+    4. 排除 ST / *ST
     """
 
     # =========================
-    # 1. 获取A股实时行情
+    # 1. 获取业绩报表
     # =========================
-    spot = ak.stock_zh_a_spot_em()
+    finance = get_finance_with_retry(
+        date=report_date,
+        retries=3
+    )
 
-    spot = spot.rename(
+    # =========================
+    # 2. 检查必要字段
+    # =========================
+    required_columns = [
+        "股票代码",
+        "股票简称",
+        "营业总收入-同比增长",
+        "净利润-同比增长"
+    ]
+
+    missing_columns = [
+        col for col in required_columns
+        if col not in finance.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"财务数据缺少字段：{missing_columns}"
+        )
+
+    # =========================
+    # 3. 统一字段名称
+    # =========================
+    finance = finance.rename(
         columns={
-            "代码": "股票代码",
-            "名称": "股票简称"
+            "营业总收入-同比增长": "营收同比",
+            "净利润-同比增长": "净利润同比",
+            "净资产收益率": "ROE",
+            "销售毛利率": "毛利率",
+            "所处行业": "所属行业"
         }
     )
 
-    # 排除 ST
-    spot = spot[
-        ~spot["股票简称"]
+    # =========================
+    # 4. 转换数字
+    # =========================
+    finance["营收同比"] = pd.to_numeric(
+        finance["营收同比"],
+        errors="coerce"
+    )
+
+    finance["净利润同比"] = pd.to_numeric(
+        finance["净利润同比"],
+        errors="coerce"
+    )
+
+    if "ROE" in finance.columns:
+        finance["ROE"] = pd.to_numeric(
+            finance["ROE"],
+            errors="coerce"
+        )
+
+    if "毛利率" in finance.columns:
+        finance["毛利率"] = pd.to_numeric(
+            finance["毛利率"],
+            errors="coerce"
+        )
+
+    # =========================
+    # 5. 排除 ST
+    # =========================
+    finance = finance[
+        ~finance["股票简称"]
         .astype(str)
         .str.contains("ST", case=False, na=False)
     ].copy()
 
     # =========================
-    # 2. 获取最新业绩快报/业绩报表
-    # =========================
-    finance = ak.stock_yjbb_em()
-
-    # 不同时间接口字段可能略有区别
-    # 这里统一处理常用字段名称
-    rename_map = {
-        "股票代码": "股票代码",
-        "股票简称": "股票简称",
-        "营业收入-营业收入": "营业收入",
-        "营业收入-同比增长": "营收同比",
-        "净利润-净利润": "净利润",
-        "净利润-同比增长": "净利润同比"
-    }
-
-    finance = finance.rename(
-        columns={
-            k: v for k, v in rename_map.items()
-            if k in finance.columns
-        }
-    )
-
-    # =========================
-    # 3. 找营收同比字段
-    # =========================
-    revenue_col = None
-
-    for col in finance.columns:
-        if "营业收入" in str(col) and "同比" in str(col):
-            revenue_col = col
-            break
-
-    # =========================
-    # 4. 找净利润同比字段
-    # =========================
-    profit_col = None
-
-    for col in finance.columns:
-        if "净利润" in str(col) and "同比" in str(col):
-            profit_col = col
-            break
-
-    if revenue_col is None or profit_col is None:
-        raise ValueError(
-            "当前财务数据接口字段发生变化，未找到营收同比或净利润同比字段"
-        )
-
-    # 转数字
-    finance["营收同比"] = pd.to_numeric(
-        finance[revenue_col],
-        errors="coerce"
-    )
-
-    finance["净利润同比"] = pd.to_numeric(
-        finance[profit_col],
-        errors="coerce"
-    )
-
-    # =========================
-    # 5. 基础业绩筛选
+    # 6. 基础业绩筛选
     # =========================
     finance = finance[
         (finance["营收同比"] >= min_revenue_growth) &
@@ -109,15 +131,8 @@ def run_reversal(
     ].copy()
 
     # =========================
-    # 6. 获取上一期业绩数据
+    # 7. 业绩改善强度
     # =========================
-    # V1阶段：
-    # 如果接口当前只有最新一期数据，
-    # 则先用净利润同比本身作为反转强度基础评分。
-    #
-    # 后续V2再增加：
-    # 本期净利润增速 > 上期净利润增速
-
     finance["业绩改善强度"] = (
         finance["净利润同比"] -
         min_profit_growth
@@ -128,27 +143,9 @@ def run_reversal(
     ].copy()
 
     # =========================
-    # 7. 合并股票简称
-    # =========================
-    result = finance.merge(
-        spot[
-            [
-                "股票代码",
-                "股票简称"
-            ]
-        ],
-        on="股票代码",
-        how="inner",
-        suffixes=("", "_实时")
-    )
-
-    if "股票简称_实时" in result.columns:
-        result["股票简称"] = result["股票简称_实时"]
-
-    # =========================
     # 8. 排序
     # =========================
-    result = result.sort_values(
+    finance = finance.sort_values(
         by=[
             "净利润同比",
             "营收同比"
@@ -165,17 +162,20 @@ def run_reversal(
     keep_columns = [
         "股票代码",
         "股票简称",
+        "所属行业",
         "营收同比",
         "净利润同比",
-        "业绩改善强度"
+        "业绩改善强度",
+        "ROE",
+        "毛利率"
     ]
 
     keep_columns = [
         col for col in keep_columns
-        if col in result.columns
+        if col in finance.columns
     ]
 
-    result = result[
+    result = finance[
         keep_columns
     ].copy()
 
