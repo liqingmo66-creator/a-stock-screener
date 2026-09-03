@@ -3,7 +3,7 @@ import pandas as pd
 
 from 策略.强势股 import run_strategy
 from 策略.行业轮动 import run_rotation
-
+from 策略.业绩反转 import run_reversal
 
 st.set_page_config(
     page_title="A股趋势筛选",
