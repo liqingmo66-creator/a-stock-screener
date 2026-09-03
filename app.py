@@ -21,7 +21,8 @@ strategy_name = st.selectbox(
     "选择选股策略",
     [
         "强势5连阳",
-        "行业轮动"
+        "行业轮动",
+        "业绩反转"
     ]
 )
 
@@ -270,3 +271,89 @@ elif strategy_name == "行业轮动":
                 except Exception as e:
 
                     st.error(f"筛选失败：{e}")
+
+
+# =========================================================
+# 策略3：业绩反转
+# =========================================================
+elif strategy_name == "业绩反转":
+
+    st.subheader("业绩反转策略")
+
+    min_revenue_growth = st.number_input(
+        "最低营收同比增速 %",
+        min_value=-100.0,
+        max_value=500.0,
+        value=10.0,
+        step=5.0
+    )
+
+    min_profit_growth = st.number_input(
+        "最低净利润同比增速 %",
+        min_value=-100.0,
+        max_value=1000.0,
+        value=30.0,
+        step=5.0
+    )
+
+    min_acceleration = st.number_input(
+        "最低业绩改善强度（百分点）",
+        min_value=0.0,
+        max_value=500.0,
+        value=20.0,
+        step=5.0
+    )
+
+    st.info(
+        f"""
+当前筛选条件：
+
+- 营收同比：≥ {min_revenue_growth}%
+- 净利润同比：≥ {min_profit_growth}%
+- 业绩改善强度：≥ {min_acceleration} 个百分点
+- 排除 ST / *ST
+"""
+    )
+
+    if st.button("开始筛选", type="primary", key="reversal_button"):
+
+        with st.spinner("正在获取最新财务数据并筛选，请稍候..."):
+
+            try:
+
+                result = run_reversal(
+                    min_revenue_growth=min_revenue_growth,
+                    min_profit_growth=min_profit_growth,
+                    min_acceleration=min_acceleration
+                )
+
+                if result.empty:
+
+                    st.warning("当前没有符合条件的股票")
+
+                else:
+
+                    st.success(
+                        f"筛选完成，共找到 {len(result)} 只股票"
+                    )
+
+                    st.dataframe(
+                        result,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    csv = result.to_csv(
+                        index=False
+                    ).encode("utf-8-sig")
+
+                    st.download_button(
+                        "下载筛选结果",
+                        data=csv,
+                        file_name="业绩反转筛选结果.csv",
+                        mime="text/csv"
+                    )
+
+            except Exception as e:
+
+                st.error(f"筛选失败：{e}")
