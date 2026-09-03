@@ -178,4 +178,4 @@ def run_rotation(
 
     result = result.reset_index(drop=True)
 
-    return result策略/行业轮动
+    return result
