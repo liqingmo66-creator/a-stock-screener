@@ -11,8 +11,6 @@ st.set_page_config(
 
 st.title("A股趋势筛选器")
 
-if st.button("开始筛选", type="primary"):
-
 st.subheader("强势5连阳策略")
 
 min_industry_gain = st.number_input(
